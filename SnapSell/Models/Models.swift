@@ -237,6 +237,56 @@ struct PostedListingResponse {
     let postedAt: Date
 }
 
+// MARK: - Scan History Entry
+
+struct ScanHistoryEntry: Codable, Identifiable {
+    let id: UUID
+    let scannedAt: Date
+    let itemName: String
+    let brand: String?
+    let category: String
+    let condition: ItemCondition
+    let priceLow: Double
+    let priceHigh: Double
+    let priceAverage: Double
+    let priceSuggested: Double
+    let soldListings: [EbayListing]   // capped at 5
+    let thumbnailData: Data?          // compressed JPEG ~160px
+
+    init(item: IdentifiedItem, analysis: PriceAnalysis, image: UIImage?) {
+        self.id = UUID()
+        self.scannedAt = Date()
+        self.itemName = item.name
+        self.brand = item.brand
+        self.category = item.category
+        self.condition = item.suggestedCondition
+        self.priceLow = analysis.low
+        self.priceHigh = analysis.high
+        self.priceAverage = analysis.average
+        self.priceSuggested = analysis.suggestedPrice
+        self.soldListings = Array(analysis.soldListings.prefix(5))
+        self.thumbnailData = ScanHistoryEntry.compress(image)
+    }
+
+    var thumbnail: UIImage? {
+        thumbnailData.flatMap { UIImage(data: $0) }
+    }
+
+    var priceRangeFormatted: String {
+        String(format: "$%.0f – $%.0f", priceLow, priceHigh)
+    }
+
+    private static func compress(_ image: UIImage?) -> Data? {
+        guard let image else { return nil }
+        let maxDim: CGFloat = 160
+        let scale = min(maxDim / image.size.width, maxDim / image.size.height)
+        let newSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: newSize)
+        let thumb = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: newSize)) }
+        return thumb.jpegData(compressionQuality: 0.6)
+    }
+}
+
 // MARK: - Analysis Step (for UI)
 
 enum AnalysisStep: Int, CaseIterable {

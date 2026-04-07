@@ -261,7 +261,7 @@ class EbayMarketplaceService {
         var queryItems: [URLQueryItem] = [
             URLQueryItem(name: "q",     value: query),
             URLQueryItem(name: "limit", value: String(min(limit, 200))),
-            URLQueryItem(name: "sort",  value: "-price"),
+            URLQueryItem(name: "sort",  value: "relevance"),
         ]
         if let cat = categoryID {
             queryItems.append(URLQueryItem(name: "filter", value: "categoryIds:{\(cat)}"))
@@ -470,6 +470,28 @@ class EbayMarketplaceService {
     // MARK: - Price Analysis
 
     private func buildPriceAnalysis(from listings: [EbayListing], isActive: Bool = false) -> PriceAnalysis {
+        // 1. Exclude sellers with a known feedback score below 50.
+        //    Listings without a score (Insights API, scrape) are kept as-is.
+        let qualified = listings.filter { $0.sellerFeedback == nil || $0.sellerFeedback! >= 50 }
+
+        // 2. Remove price outliers via IQR (Tukey fences: Q1 - 1.5×IQR … Q3 + 1.5×IQR).
+        //    Requires at least 4 data points; otherwise skip outlier removal.
+        let deduped: [EbayListing]
+        if qualified.count >= 4 {
+            let sorted = qualified.map { $0.price }.sorted()
+            let q1 = sorted[sorted.count / 4]
+            let q3 = sorted[(sorted.count * 3) / 4]
+            let iqr = q3 - q1
+            let lower = q1 - 1.5 * iqr
+            let upper = q3 + 1.5 * iqr
+            deduped = qualified.filter { $0.price >= lower && $0.price <= upper }
+        } else {
+            deduped = qualified
+        }
+
+        // 3. Sort by price ascending for display.
+        let listings = deduped.sorted { $0.price < $1.price }
+
         guard !listings.isEmpty else {
             return PriceAnalysis(
                 low: 0, average: 0, high: 0, median: 0,

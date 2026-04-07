@@ -123,6 +123,7 @@ struct ProfileView: View {
             }
             .navigationTitle("Profile")
             .navigationBarTitleDisplayMode(.large)
+            .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 49) }
             .alert("eBay Auth Error", isPresented: $showError) {
                 Button("OK") {}
             } message: {

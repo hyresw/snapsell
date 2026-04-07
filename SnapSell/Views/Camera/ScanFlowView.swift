@@ -14,6 +14,7 @@ enum ScanFlowScreen {
 // MARK: - ScanFlowView
 
 struct ScanFlowView: View {
+    @EnvironmentObject var appState: AppState
     @State private var currentScreen: ScanFlowScreen = .camera
     @State private var previousResultsScreen: ScanFlowScreen = .camera
 
@@ -110,6 +111,8 @@ struct ScanFlowView: View {
                 let item = try await ClaudeVisionService.shared.identifyItem(image: image)
                 // eBay search never throws — returns empty analysis if nothing found
                 let analysis = await EbayMarketplaceService.shared.searchSoldListings(for: item)
+                let entry = ScanHistoryEntry(item: item, analysis: analysis, image: image)
+                await MainActor.run { appState.appendScanHistory(entry) }
                 await MainActor.run {
                     let screen = ScanFlowScreen.results(item, analysis, image)
                     self.previousResultsScreen = screen

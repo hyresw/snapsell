@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import AVFoundation
 import Combine
+import PhotosUI
 
 // Thin SwiftUI bridge — all layout is handled by UIKit below.
 struct CameraView: UIViewControllerRepresentable {
@@ -111,6 +112,7 @@ final class CameraViewController: UIViewController {
 
         // Library button
         configureIconButton(libraryButton, icon: "photo.on.rectangle")
+        libraryButton.addTarget(self, action: #selector(didTapLibrary), for: .touchUpInside)
 
         // Shutter button — outer white circle
         shutterButton.backgroundColor = .white
@@ -276,6 +278,29 @@ final class CameraViewController: UIViewController {
 
     @objc private func didTapFlip() {
         camera.flipCamera()
+    }
+
+    @objc private func didTapLibrary() {
+        var config = PHPickerConfiguration(photoLibrary: .shared())
+        config.selectionLimit = 1
+        config.filter = .images
+        let picker = PHPickerViewController(configuration: config)
+        picker.delegate = self
+        present(picker, animated: true)
+    }
+}
+
+// MARK: - PHPickerViewControllerDelegate
+
+extension CameraViewController: PHPickerViewControllerDelegate {
+    func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+        picker.dismiss(animated: true)
+        guard let provider = results.first?.itemProvider,
+              provider.canLoadObject(ofClass: UIImage.self) else { return }
+        provider.loadObject(ofClass: UIImage.self) { [weak self] object, _ in
+            guard let image = object as? UIImage else { return }
+            DispatchQueue.main.async { self?.onCapture(image) }
+        }
     }
 }
 
