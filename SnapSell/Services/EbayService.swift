@@ -3,16 +3,29 @@ import UIKit
 
 // MARK: - eBay Marketplace Service
 
+// Isolated token store — prevents race conditions when two scans fire simultaneously.
+private actor AppTokenCache {
+    private var token: String?
+    private var expiry: Date?
+
+    func get() -> String? {
+        guard let t = token, let e = expiry, Date() < e else { return nil }
+        return t
+    }
+
+    func set(token: String, expiresIn: Int) {
+        self.token = token
+        self.expiry = Date().addingTimeInterval(TimeInterval(expiresIn) - 60)
+    }
+}
+
 class EbayMarketplaceService {
 
     static let shared = EbayMarketplaceService()
     private init() {}
 
     private let session = URLSession.shared
-
-    // Cached application-level OAuth token (Client Credentials flow, no user login)
-    private var cachedAppToken: String?
-    private var tokenExpiry: Date?
+    private let tokenCache = AppTokenCache()
 
     // MARK: - Search Sold Listings
 
@@ -144,14 +157,31 @@ class EbayMarketplaceService {
             return "171485" // iPads/Tablets & eBook Readers
         }
         if combined.contains("headphone") || combined.contains("earphone") || combined.contains("airpod")
-            || combined.contains("earbud") {
+            || combined.contains("earbud") || combined.contains("headset") {
             return "112529" // Portable Audio & Headphones
         }
-        if combined.contains("camera") && !combined.contains("laptop") {
+        // Camera: only match when the subcategory is explicitly a camera body/type.
+        // Exclude accessories (bags, cases, straps), dash cameras (→ Automotive),
+        // and security cameras (different eBay category tree).
+        if combined.contains("camera") && !combined.contains("bag") && !combined.contains("case")
+            && !combined.contains("strap") && !combined.contains("accessory")
+            && !combined.contains("accessories") && !combined.contains("dash")
+            && !combined.contains("security") {
             return "31388"  // Digital Cameras
         }
-        if combined.contains("smartwatch") || combined.contains("apple watch") {
+        if combined.contains("smartwatch") || combined.contains("apple watch")
+            || combined.contains("galaxy watch") {
             return "178893" // Smart Watches
+        }
+        // Video game software (disc, cartridge, digital code) — distinct from consoles
+        if sub.contains("video game") && !sub.contains("console") {
+            return "139973" // Video Games
+        }
+        // Musical instruments
+        if combined.contains("guitar") || combined.contains("piano") || combined.contains("keyboard")
+            || combined.contains("drum") || combined.contains("violin") || combined.contains("trumpet")
+            || combined.contains("instrument") {
+            return "619"    // Musical Instruments & Gear
         }
 
         // Broad category fallbacks
@@ -161,12 +191,22 @@ class EbayMarketplaceService {
         case let c where c.contains("clothing") || c.contains("apparel")
                       || c.contains("shirt")    || c.contains("jacket"):                        return "11450"
         case let c where c.contains("collectible"):                                             return "1"
-        case let c where c.contains("toy") || c.contains("game"):                              return "220"
-        case let c where c.contains("sport"):                                                   return "888"
-        case let c where c.contains("book"):                                                    return "267"
+        case let c where c.contains("toy"):                                                     return "220"
+        case let c where c.contains("game"):                                                    return "139973"
+        case let c where c.contains("sport") || c.contains("outdoor"):                         return "888"
+        case let c where c.contains("book") || c.contains("media"):                            return "267"
+        case let c where c.contains("music") || c.contains("vinyl") || c.contains("cd"):       return "176984"
+        case let c where c.contains("movie") || c.contains("dvd") || c.contains("blu-ray"):    return "617"
         case let c where c.contains("jewelry"):                                                 return "281"
         case let c where c.contains("watch"):                                                   return "14324"
         case let c where c.contains("bag") || c.contains("handbag"):                           return "169291"
+        case let c where c.contains("tool") || c.contains("hardware"):                         return "631"
+        case let c where c.contains("automotive") || c.contains("car") || c.contains("vehicle"): return "6028"
+        case let c where c.contains("baby") || c.contains("infant"):                           return "2984"
+        case let c where c.contains("health") || c.contains("beauty"):                         return "26395"
+        case let c where c.contains("pet"):                                                     return "1281"
+        case let c where c.contains("home") || c.contains("garden"):                           return "11700"
+        case let c where c.contains("office") || c.contains("supply"):                         return "1245"
         default:                                                                                return nil
         }
     }
@@ -176,9 +216,7 @@ class EbayMarketplaceService {
     /// Returns a cached or freshly-fetched application access token.
     /// Uses Client Credentials flow — no user login required.
     private func fetchAppToken() async throws -> String {
-        if let token = cachedAppToken, let expiry = tokenExpiry, Date() < expiry {
-            return token
-        }
+        if let cached = await tokenCache.get() { return cached }
 
         let clientID     = APIConfig.ebayClientID
         let clientSecret = APIConfig.ebayClientSecret
@@ -190,7 +228,6 @@ class EbayMarketplaceService {
             throw EbayServiceError.invalidURL
         }
 
-        // Basic auth: base64(clientID:clientSecret)
         let raw = "\(clientID):\(clientSecret)"
         guard let encoded = raw.data(using: .utf8)?.base64EncodedString() else {
             throw EbayServiceError.invalidURL
@@ -200,7 +237,6 @@ class EbayMarketplaceService {
         request.httpMethod = "POST"
         request.setValue("Basic \(encoded)", forHTTPHeaderField: "Authorization")
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        // Scope needed for Browse + Marketplace Insights read access
         request.httpBody = "grant_type=client_credentials&scope=https%3A%2F%2Fapi.ebay.com%2Foauth%2Fapi_scope"
             .data(using: .utf8)
 
@@ -216,9 +252,7 @@ class EbayMarketplaceService {
             let expires_in: Int
         }
         let resp = try JSONDecoder().decode(TokenResponse.self, from: data)
-        cachedAppToken = resp.access_token
-        // Expire 60 s early to avoid using a token right at its boundary
-        tokenExpiry = Date().addingTimeInterval(TimeInterval(resp.expires_in) - 60)
+        await tokenCache.set(token: resp.access_token, expiresIn: resp.expires_in)
         return resp.access_token
     }
 
@@ -436,7 +470,7 @@ class EbayMarketplaceService {
                 listingURL: listingURL,
                 sellerFeedback: nil,
                 shippingCost: nil,
-                isAuction: chunk.contains("s-item__bids") || chunk.contains("bid"),
+                isAuction: chunk.contains("s-item__bids"),
                 bidsCount: nil
             ))
         }
@@ -468,37 +502,96 @@ class EbayMarketplaceService {
     }
 
     private func parseCondition(_ raw: String?) -> ItemCondition {
-        switch raw?.lowercased().trimmingCharacters(in: .whitespaces) {
-        case "new", "brand new", "new with tags":         return .newWithTags
-        case "new without tags":                          return .newWithoutTags
-        case "like new", "open box":                      return .likeNew
-        case "very good", "good":                         return .good
-        case "acceptable", "fair":                        return .acceptable
-        case "for parts or not working", "for parts":     return .forParts
-        default:                                          return .good
+        let cleaned = raw?.lowercased().trimmingCharacters(in: .whitespaces) ?? ""
+
+        // Exact matches first (eBay HTML scrape and Browse API condition strings)
+        switch cleaned {
+        case "new", "brand new", "new with tags":             return .newWithTags
+        case "new without tags":                              return .newWithoutTags
+        case "like new", "open box":                          return .likeNew
+        case "very good", "good":                             return .good
+        case "acceptable", "fair":                            return .acceptable
+        case "for parts or not working", "for parts":         return .forParts
+        case "pre-owned", "preowned", "used":                 return .good
+        case "seller refurbished", "manufacturer refurbished",
+             "certified refurbished", "refurbished":          return .likeNew
+        default: break
         }
+
+        // Substring fallback — handles variants like "New (other)", "Used – Very Good"
+        if cleaned.hasPrefix("new") { return .newWithTags }
+        if cleaned.contains("refurb") { return .likeNew }
+        if cleaned.contains("pre-own") || cleaned.contains("preown") { return .good }
+        if cleaned.contains("part") { return .forParts }
+
+        return .good
     }
 
     private func parseSoldDate(_ raw: String?) -> Date? {
         guard let raw = raw?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return nil }
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US")
-        for format in ["MMM d, yyyy", "MMM dd, yyyy", "d MMM yyyy", "MMM d"] {
+
+        // Full-date formats (require year to avoid wrong-century timestamps)
+        for format in ["MMM d, yyyy", "MMM dd, yyyy", "d MMM yyyy"] {
             formatter.dateFormat = format
             if let date = formatter.date(from: raw) { return date }
         }
+
+        // Month+day only — eBay sometimes omits the year for current-year sales.
+        // Attach the current calendar year so the date is usable for recency filtering.
+        for format in ["MMM d", "MMM dd"] {
+            formatter.dateFormat = format
+            if let partial = formatter.date(from: raw) {
+                let year = Calendar.current.component(.year, from: Date())
+                return Calendar.current.date(bySetting: .year, value: year, of: partial)
+            }
+        }
+
         return nil
     }
 
     /// Replaces common HTML entities so titles render correctly.
     private func decodeHTMLEntities(_ string: String) -> String {
-        string
-            .replacingOccurrences(of: "&amp;",  with: "&")
-            .replacingOccurrences(of: "&quot;", with: "\"")
-            .replacingOccurrences(of: "&#39;",  with: "'")
-            .replacingOccurrences(of: "&apos;", with: "'")
-            .replacingOccurrences(of: "&lt;",   with: "<")
-            .replacingOccurrences(of: "&gt;",   with: ">")
+        // Named entities
+        var s = string
+            .replacingOccurrences(of: "&amp;",   with: "&")
+            .replacingOccurrences(of: "&quot;",  with: "\"")
+            .replacingOccurrences(of: "&apos;",  with: "'")
+            .replacingOccurrences(of: "&lt;",    with: "<")
+            .replacingOccurrences(of: "&gt;",    with: ">")
+            .replacingOccurrences(of: "&nbsp;",  with: " ")
+            .replacingOccurrences(of: "&ndash;", with: "–")
+            .replacingOccurrences(of: "&mdash;", with: "—")
+            .replacingOccurrences(of: "&rsquo;", with: "'")
+            .replacingOccurrences(of: "&lsquo;", with: "'")
+            .replacingOccurrences(of: "&rdquo;", with: "\"")
+            .replacingOccurrences(of: "&ldquo;", with: "\"")
+        // Numeric decimal entities: &#39; &#160; &#8217; etc.
+        if let regex = try? NSRegularExpression(pattern: "&#(\\d+);") {
+            let matches = regex.matches(in: s, range: NSRange(s.startIndex..., in: s))
+            for match in matches.reversed() {
+                guard let r = Range(match.range, in: s),
+                      let numR = Range(match.range(at: 1), in: s),
+                      let code = UInt32(s[numR]),
+                      let scalar = Unicode.Scalar(code)
+                else { continue }
+                s.replaceSubrange(r, with: String(scalar))
+            }
+        }
+        // Numeric hex entities: &#x27; &#xA0; etc.
+        if let regex = try? NSRegularExpression(pattern: "&#x([0-9A-Fa-f]+);") {
+            let matches = regex.matches(in: s, range: NSRange(s.startIndex..., in: s))
+            for match in matches.reversed() {
+                guard let r = Range(match.range, in: s),
+                      let hexR = Range(match.range(at: 1), in: s),
+                      let code = UInt32(s[hexR], radix: 16),
+                      let scalar = Unicode.Scalar(code)
+                else { continue }
+                s.replaceSubrange(r, with: String(scalar))
+            }
+        }
+        return s
     }
 
     // MARK: - Price Analysis
@@ -973,24 +1066,44 @@ class EbayListingService {
             return "171485"
         }
         if combined.contains("headphone") || combined.contains("earphone") || combined.contains("airpod")
-            || combined.contains("earbud") {
+            || combined.contains("earbud") || combined.contains("headset") {
             return "112529"
         }
-        if combined.contains("smartwatch") || combined.contains("apple watch") {
+        if combined.contains("camera") && !combined.contains("bag") && !combined.contains("case")
+            && !combined.contains("strap") && !combined.contains("accessory")
+            && !combined.contains("dash") && !combined.contains("security") {
+            return "31388"
+        }
+        if combined.contains("smartwatch") || combined.contains("apple watch")
+            || combined.contains("galaxy watch") {
             return "178893"
+        }
+        if sub.contains("video game") && !sub.contains("console") { return "139973" }
+        if combined.contains("guitar") || combined.contains("piano") || combined.contains("keyboard")
+            || combined.contains("drum") || combined.contains("instrument") {
+            return "619"
         }
 
         switch cat {
-        case let c where c.contains("sneaker") || c.contains("shoe"):  return "15709"
-        case let c where c.contains("electronic") || c.contains("tech"): return "293"
-        case let c where c.contains("clothing") || c.contains("apparel"): return "11450"
-        case let c where c.contains("collectible"):                     return "1"
-        case let c where c.contains("toy") || c.contains("game"):      return "220"
-        case let c where c.contains("sport"):                           return "888"
-        case let c where c.contains("book"):                            return "267"
-        case let c where c.contains("jewelry"):                         return "281"
-        case let c where c.contains("watch"):                           return "14324"
-        default:                                                         return "99"
+        case let c where c.contains("sneaker") || c.contains("shoe"):        return "15709"
+        case let c where c.contains("electronic") || c.contains("tech"):     return "293"
+        case let c where c.contains("clothing") || c.contains("apparel"):    return "11450"
+        case let c where c.contains("collectible"):                          return "1"
+        case let c where c.contains("toy"):                                  return "220"
+        case let c where c.contains("game"):                                 return "139973"
+        case let c where c.contains("sport") || c.contains("outdoor"):      return "888"
+        case let c where c.contains("book") || c.contains("media"):         return "267"
+        case let c where c.contains("music") || c.contains("vinyl"):        return "176984"
+        case let c where c.contains("movie") || c.contains("dvd"):          return "617"
+        case let c where c.contains("jewelry"):                             return "281"
+        case let c where c.contains("watch"):                               return "14324"
+        case let c where c.contains("tool") || c.contains("hardware"):      return "631"
+        case let c where c.contains("automotive") || c.contains("car"):     return "6028"
+        case let c where c.contains("baby"):                                return "2984"
+        case let c where c.contains("health") || c.contains("beauty"):      return "26395"
+        case let c where c.contains("pet"):                                 return "1281"
+        case let c where c.contains("home") || c.contains("garden"):        return "11700"
+        default:                                                              return "99"
         }
     }
 }
