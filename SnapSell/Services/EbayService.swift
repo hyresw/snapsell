@@ -26,7 +26,7 @@ class EbayMarketplaceService {
     func searchSoldListings(for item: IdentifiedItem) async -> PriceAnalysis {
         lastSearchError = nil
         lastScannedItem = item
-        let categoryID = ebayCategoryID(for: item.category)
+        let categoryID = ebayCategoryID(for: item.category, subcategory: item.subcategory)
         let queries = fallbackQueries(for: item)
 
         // Obtain an OAuth app token (Client Credentials grant).
@@ -120,20 +120,54 @@ class EbayMarketplaceService {
         return queries
     }
 
-    /// Maps a human-readable category string to an eBay category ID for filtering.
-    private func ebayCategoryID(for category: String) -> String? {
-        switch category.lowercased() {
+    /// Maps category + subcategory to an eBay category ID for search filtering.
+    /// Checks subcategory first so common high-value items get a precise ID
+    /// instead of the broad "Consumer Electronics" parent (which would mix in
+    /// unrelated listings and corrupt the price sample).
+    private func ebayCategoryID(for category: String, subcategory: String? = nil) -> String? {
+        let cat = category.lowercased()
+        let sub = (subcategory ?? "").lowercased()
+        let combined = cat + " " + sub
+
+        // Specific electronics subcategories — checked before the broad "electronics" bucket
+        if combined.contains("phone") || combined.contains("smartphone") || combined.contains("iphone") {
+            return "9355"   // Cell Phones & Smartphones
+        }
+        if combined.contains("console") || combined.contains("playstation") || combined.contains("xbox")
+            || combined.contains("nintendo") || combined.contains("game console") {
+            return "139971" // Video Game Consoles
+        }
+        if combined.contains("laptop") || combined.contains("macbook") || combined.contains("notebook") {
+            return "177"    // Laptops & Netbooks
+        }
+        if combined.contains("tablet") || combined.contains("ipad") {
+            return "171485" // iPads/Tablets & eBook Readers
+        }
+        if combined.contains("headphone") || combined.contains("earphone") || combined.contains("airpod")
+            || combined.contains("earbud") {
+            return "112529" // Portable Audio & Headphones
+        }
+        if combined.contains("camera") && !combined.contains("laptop") {
+            return "31388"  // Digital Cameras
+        }
+        if combined.contains("smartwatch") || combined.contains("apple watch") {
+            return "178893" // Smart Watches
+        }
+
+        // Broad category fallbacks
+        switch cat {
         case let c where c.contains("sneaker") || c.contains("shoe") || c.contains("footwear"): return "15709"
-        case let c where c.contains("electronic") || c.contains("tech"): return "293"
-        case let c where c.contains("clothing") || c.contains("apparel") || c.contains("shirt") || c.contains("jacket"): return "11450"
-        case let c where c.contains("collectible"): return "1"
-        case let c where c.contains("toy") || c.contains("game"): return "220"
-        case let c where c.contains("sport"): return "888"
-        case let c where c.contains("book"): return "267"
-        case let c where c.contains("jewelry"): return "281"
-        case let c where c.contains("watch"): return "14324"
-        case let c where c.contains("bag") || c.contains("handbag"): return "169291"
-        default: return nil
+        case let c where c.contains("electronic") || c.contains("tech"):                        return "293"
+        case let c where c.contains("clothing") || c.contains("apparel")
+                      || c.contains("shirt")    || c.contains("jacket"):                        return "11450"
+        case let c where c.contains("collectible"):                                             return "1"
+        case let c where c.contains("toy") || c.contains("game"):                              return "220"
+        case let c where c.contains("sport"):                                                   return "888"
+        case let c where c.contains("book"):                                                    return "267"
+        case let c where c.contains("jewelry"):                                                 return "281"
+        case let c where c.contains("watch"):                                                   return "14324"
+        case let c where c.contains("bag") || c.contains("handbag"):                           return "169291"
+        default:                                                                                return nil
         }
     }
 
@@ -845,7 +879,7 @@ class EbayListingService {
                 "paymentPolicyId": "YOUR_PAYMENT_POLICY_ID",
                 "returnPolicyId": "YOUR_RETURN_POLICY_ID"
             ],
-            "categoryId": ebayCategory(for: draft.category),
+            "categoryId": ebayCategory(for: draft.category, subcategory: draft.identifiedItem?.subcategory),
             "shippingOptions": [
                 [
                     "optionType": "DOMESTIC",
@@ -920,17 +954,43 @@ class EbayListingService {
         return aspects
     }
 
-    private func ebayCategory(for category: String) -> String {
-        switch category.lowercased() {
-        case let c where c.contains("sneaker") || c.contains("shoe"): return "15709"
-        case let c where c.contains("electronic"): return "293"
-        case let c where c.contains("clothing"): return "11450"
-        case let c where c.contains("collectible"): return "1"
-        case let c where c.contains("toy"): return "220"
-        case let c where c.contains("sport"): return "888"
-        case let c where c.contains("book"): return "267"
-        case let c where c.contains("jewelry"): return "281"
-        default: return "99"
+    private func ebayCategory(for category: String, subcategory: String? = nil) -> String {
+        let cat = category.lowercased()
+        let sub = (subcategory ?? "").lowercased()
+        let combined = cat + " " + sub
+
+        if combined.contains("phone") || combined.contains("smartphone") || combined.contains("iphone") {
+            return "9355"
+        }
+        if combined.contains("console") || combined.contains("playstation") || combined.contains("xbox")
+            || combined.contains("nintendo") || combined.contains("game console") {
+            return "139971"
+        }
+        if combined.contains("laptop") || combined.contains("macbook") || combined.contains("notebook") {
+            return "177"
+        }
+        if combined.contains("tablet") || combined.contains("ipad") {
+            return "171485"
+        }
+        if combined.contains("headphone") || combined.contains("earphone") || combined.contains("airpod")
+            || combined.contains("earbud") {
+            return "112529"
+        }
+        if combined.contains("smartwatch") || combined.contains("apple watch") {
+            return "178893"
+        }
+
+        switch cat {
+        case let c where c.contains("sneaker") || c.contains("shoe"):  return "15709"
+        case let c where c.contains("electronic") || c.contains("tech"): return "293"
+        case let c where c.contains("clothing") || c.contains("apparel"): return "11450"
+        case let c where c.contains("collectible"):                     return "1"
+        case let c where c.contains("toy") || c.contains("game"):      return "220"
+        case let c where c.contains("sport"):                           return "888"
+        case let c where c.contains("book"):                            return "267"
+        case let c where c.contains("jewelry"):                         return "281"
+        case let c where c.contains("watch"):                           return "14324"
+        default:                                                         return "99"
         }
     }
 }
