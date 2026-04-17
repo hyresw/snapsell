@@ -205,7 +205,8 @@ class EbayMarketplaceService {
         case let c where c.contains("baby") || c.contains("infant"):                           return "2984"
         case let c where c.contains("health") || c.contains("beauty"):                         return "26395"
         case let c where c.contains("pet"):                                                     return "1281"
-        case let c where c.contains("home") || c.contains("garden"):                           return "11700"
+        case let c where c.contains("home") || c.contains("garden")
+                      || c.contains("kitchen") || c.contains("appliance"): return "11700"
         case let c where c.contains("office") || c.contains("supply"):                         return "1245"
         default:                                                                                return nil
         }
@@ -1102,7 +1103,8 @@ class EbayListingService {
         case let c where c.contains("baby"):                                return "2984"
         case let c where c.contains("health") || c.contains("beauty"):      return "26395"
         case let c where c.contains("pet"):                                 return "1281"
-        case let c where c.contains("home") || c.contains("garden"):        return "11700"
+        case let c where c.contains("home") || c.contains("garden")
+                      || c.contains("kitchen") || c.contains("appliance"): return "11700"
         default:                                                              return "99"
         }
     }
