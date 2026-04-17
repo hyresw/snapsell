@@ -14,6 +14,8 @@ struct ProfileView: View {
     @State private var showDiagnosticSheet = false
     @State private var diagnosticReport: String = ""
     @State private var isRunningDiagnostic = false
+    @State private var showLocalLLMSheet = false
+    @State private var localLLMEnabled = APIConfig.localLLMEnabled
 
     private var ebayCredentialsConfigured: Bool {
         !ebayClientID.isEmpty
@@ -58,16 +60,55 @@ struct ProfileView: View {
                     Button(action: { showAPIKeySheet = true }) {
                         HStack {
                             Label("Anthropic API Key", systemImage: "key.fill")
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(localLLMEnabled ? .secondary : .primary)
                             Spacer()
                             Image(systemName: anthropicKey.isEmpty ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
                                 .foregroundStyle(anthropicKey.isEmpty ? .red : .green)
+                                .opacity(localLLMEnabled ? 0.4 : 1)
                         }
                     }
+                    .disabled(localLLMEnabled)
                 } header: {
                     Text("AI Configuration")
                 } footer: {
-                    Text("Required for item identification. Get your key at console.anthropic.com")
+                    Text(localLLMEnabled
+                         ? "Claude is bypassed while Local LLM is active."
+                         : "Required for item identification. Get your key at console.anthropic.com")
+                }
+
+                // Local LLM Section
+                Section {
+                    Toggle(isOn: $localLLMEnabled) {
+                        Label("Use Local LLM", systemImage: "cpu.fill")
+                    }
+                    .onChange(of: localLLMEnabled) { _, newValue in
+                        APIConfig.localLLMEnabled = newValue
+                    }
+
+                    if localLLMEnabled {
+                        Button(action: { showLocalLLMSheet = true }) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(APIConfig.localLLMModel)
+                                        .font(.system(size: 15, design: .monospaced))
+                                        .foregroundStyle(.primary)
+                                    Text(APIConfig.localLLMBaseURL)
+                                        .font(.system(size: 12, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Local LLM")
+                } footer: {
+                    Text(localLLMEnabled
+                         ? "Vision calls go to your local server. Make sure Ollama or LM Studio is running and the model supports images."
+                         : "Run Gemma, Qwen, LLaVA, or any vision model on your Mac via Ollama or LM Studio — no API key needed.")
                 }
 
                 // Debug
@@ -137,6 +178,9 @@ struct ProfileView: View {
             }
             .sheet(isPresented: $showDiagnosticSheet) {
                 DiagnosticReportSheet(report: diagnosticReport)
+            }
+            .sheet(isPresented: $showLocalLLMSheet) {
+                LocalLLMSheet()
             }
         }
     }
@@ -356,5 +400,124 @@ struct APIKeySheet: View {
             }
             .onAppear { tempKey = key }
         }
+    }
+}
+
+// MARK: - Local LLM Sheet
+
+struct LocalLLMSheet: View {
+    @Environment(\.dismiss) var dismiss
+    @State private var baseURL = APIConfig.localLLMBaseURL
+    @State private var model = APIConfig.localLLMModel
+
+    private let presets: [(label: String, url: String, model: String)] = [
+        ("Ollama – Gemma 3 12B",   "http://localhost:11434/v1", "gemma3:12b"),
+        ("Ollama – Gemma 3 4B",    "http://localhost:11434/v1", "gemma3:4b"),
+        ("Ollama – Qwen2.5-VL 7B", "http://localhost:11434/v1", "qwen2.5vl:7b"),
+        ("Ollama – LLaVA 13B",     "http://localhost:11434/v1", "llava:13b"),
+        ("LM Studio",              "http://localhost:1234/v1",  "loaded-model"),
+    ]
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Server URL")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        TextField("http://localhost:11434/v1", text: $baseURL)
+                            .font(.system(size: 14, design: .monospaced))
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .keyboardType(.URL)
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Model")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        TextField("gemma3:12b", text: $model)
+                            .font(.system(size: 14, design: .monospaced))
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                    }
+                } header: {
+                    Text("Connection")
+                } footer: {
+                    Text("The iPhone must be on the same Wi-Fi network as the Mac running the local server.")
+                }
+
+                Section("Quick Presets") {
+                    ForEach(presets, id: \.label) { preset in
+                        Button {
+                            baseURL = preset.url
+                            model = preset.model
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(preset.label)
+                                        .foregroundStyle(.primary)
+                                    Text("\(preset.url)  •  \(preset.model)")
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if baseURL == preset.url && model == preset.model {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(.accentColor)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Section("Supported Models") {
+                    infoRow(icon: "star.fill", color: .yellow,
+                            title: "Gemma 3 (Google)",
+                            detail: "ollama pull gemma3:12b  or  gemma3:4b")
+                    infoRow(icon: "star.fill", color: .blue,
+                            title: "Qwen2.5-VL (Alibaba)",
+                            detail: "ollama pull qwen2.5vl:7b")
+                    infoRow(icon: "star.fill", color: .purple,
+                            title: "LLaVA / LLaVA-Llama3",
+                            detail: "ollama pull llava:13b")
+                    infoRow(icon: "star.fill", color: .green,
+                            title: "Any OpenAI-compatible VLM",
+                            detail: "Works with LM Studio, Jan.ai, etc.")
+                }
+            }
+            .navigationTitle("Local LLM")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        APIConfig.localLLMBaseURL = baseURL
+                        APIConfig.localLLMModel = model
+                        dismiss()
+                    }
+                    .disabled(baseURL.isEmpty || model.isEmpty)
+                }
+            }
+        }
+    }
+
+    private func infoRow(icon: String, color: Color, title: String, detail: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .foregroundStyle(color)
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 14))
+                Text(detail)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
     }
 }

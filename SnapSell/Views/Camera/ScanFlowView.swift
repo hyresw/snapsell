@@ -96,19 +96,22 @@ struct ScanFlowView: View {
     // MARK: - Capture Handler
 
     private func handleCapture(image: UIImage) {
-        let key = APIConfig.anthropicAPIKey
-        guard key != "YOUR_ANTHROPIC_API_KEY", !key.isEmpty else {
-            withAnimation {
-                currentScreen = .error("Anthropic API key is not set.\n\nGo to the Profile tab → AI Configuration to add your key from console.anthropic.com.")
+        // Guard: cloud Claude needs an API key; local LLM just needs the server running.
+        if !APIConfig.localLLMEnabled {
+            let key = APIConfig.anthropicAPIKey
+            guard key != "YOUR_ANTHROPIC_API_KEY", !key.isEmpty else {
+                withAnimation {
+                    currentScreen = .error("Anthropic API key is not set.\n\nGo to the Profile tab → AI Configuration to add your key from console.anthropic.com.")
+                }
+                return
             }
-            return
         }
 
         withAnimation { currentScreen = .analyzing }
 
         Task {
             do {
-                let item = try await ClaudeVisionService.shared.identifyItem(image: image)
+                let item = try await VisionServiceManager.shared.identifyItem(image: image)
                 // eBay search never throws — returns empty analysis if nothing found
                 let analysis = await EbayMarketplaceService.shared.searchSoldListings(for: item)
                 let entry = ScanHistoryEntry(item: item, analysis: analysis, image: image)
@@ -129,6 +132,19 @@ struct ScanFlowView: View {
     private func friendlyError(_ error: Error) -> String {
         let raw = error.localizedDescription
         let lower = raw.lowercased()
+
+        if APIConfig.localLLMEnabled {
+            if lower.contains("could not connect") || lower.contains("connection refused")
+                || lower.contains("network connection") || lower.contains("url session") {
+                let url = APIConfig.localLLMBaseURL
+                let model = APIConfig.localLLMModel
+                return "Could not reach the local LLM server.\n\nExpected: \(url)\nModel: \(model)\n\nMake sure Ollama or LM Studio is running on your Mac and the iPhone is on the same Wi-Fi network.\n\nOllama: ollama serve\nLM Studio: enable local server in app settings.\n\nError: \(raw)"
+            }
+            if lower.contains("404") {
+                return "Model '\(APIConfig.localLLMModel)' not found on the server.\n\nFor Ollama run: ollama pull \(APIConfig.localLLMModel)\n\nError: \(raw)"
+            }
+            return "Local LLM recognition failed.\n\nError: \(raw)"
+        }
 
         if lower.contains("credit") || lower.contains("balance") || lower.contains("billing") {
             return "Your Anthropic API credits are exhausted.\n\nAdd credits at:\nconsole.anthropic.com/settings/billing\n\nThen try again."

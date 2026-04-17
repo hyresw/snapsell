@@ -79,4 +79,32 @@ enum APIConfig {
     static let ebayMarketplaceInsightsURL = "\(ebayBaseURL)/buy/marketplace_insights/v1_beta"
     static let ebaySellInventoryURL = "\(ebayBaseURL)/sell/inventory/v1"
     static let ebaySellOfferURL = "\(ebayBaseURL)/sell/account/v1"
+
+    // MARK: - Local LLM (Ollama / LM Studio)
+
+    /// When true, vision calls are routed to the local LLM instead of Claude.
+    static var localLLMEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: "local_llm_enabled") }
+        set { UserDefaults.standard.set(newValue, forKey: "local_llm_enabled") }
+    }
+
+    /// Base URL of the OpenAI-compatible endpoint.
+    /// Ollama default: http://localhost:11434/v1
+    /// LM Studio default: http://localhost:1234/v1
+    static var localLLMBaseURL: String {
+        get {
+            UserDefaults.standard.string(forKey: "local_llm_base_url")
+                ?? "http://localhost:11434/v1"
+        }
+        set { UserDefaults.standard.set(newValue, forKey: "local_llm_base_url") }
+    }
+
+    /// Model tag to request from the local server, e.g. "gemma3:12b", "qwen2.5vl:7b", "llava:13b".
+    static var localLLMModel: String {
+        get {
+            UserDefaults.standard.string(forKey: "local_llm_model")
+                ?? "gemma3:12b"
+        }
+        set { UserDefaults.standard.set(newValue, forKey: "local_llm_model") }
+    }
 }

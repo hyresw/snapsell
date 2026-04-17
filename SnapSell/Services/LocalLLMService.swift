@@ -1,26 +1,38 @@
 import Foundation
 import UIKit
 
-// MARK: - Claude Vision Service
+// MARK: - Local LLM Vision Service
+//
+// Connects to any OpenAI-compatible local server (Ollama, LM Studio) that hosts
+// a vision-capable model such as Gemma 3, Qwen2.5-VL, LLaVA, or Moondream.
+//
+// Ollama setup:
+//   brew install ollama && ollama pull gemma3:12b
+//   ollama serve            # starts at http://localhost:11434
+//
+// LM Studio setup:
+//   Download from lmstudio.ai, load a VLM, enable the local server (port 1234).
 
-class ClaudeVisionService: VisionServiceProtocol {
+class LocalLLMService: VisionServiceProtocol {
 
-    static let shared = ClaudeVisionService()
+    static let shared = LocalLLMService()
     private init() {}
 
-    private let session = URLSession.shared
+    private let session: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 180   // local inference can be slow
+        config.timeoutIntervalForResource = 300
+        return URLSession(configuration: config)
+    }()
 
-    // MARK: - Public API
+    // MARK: - VisionServiceProtocol
 
-    /// Send a photo to Claude and get back a structured IdentifiedItem
     func identifyItem(image: UIImage) async throws -> IdentifiedItem {
-        // 1568px is the threshold where Claude processes images at full detail.
-        // Below this, pixels are upsampled internally and fine features (port type,
-        // Dynamic Island vs notch, camera arrangement) become harder to distinguish.
-        // Progressive quality fallback keeps the payload under the 5 MB API limit.
         let resized = image.resizedToMaxDimension(1568)
 
-        let limit = 5_100_000
+        // Local models typically accept larger payloads than cloud APIs, but we
+        // still compress so the base64 string stays manageable for the context window.
+        let limit = 10_000_000
         let qualities: [CGFloat] = [0.85, 0.7, 0.5, 0.3]
         var imageData: Data?
         for q in qualities {
@@ -41,6 +53,8 @@ class ClaudeVisionService: VisionServiceProtocol {
     // MARK: - Request Building
 
     private func buildRequestBody(base64Image: String) -> [String: Any] {
+        // Same identification prompt used for Claude so switching providers doesn't
+        // change the expected output schema.
         let systemPrompt = """
         You are an expert item identification AI for a reselling app. \
         Exact model identification directly affects resale value — do not guess or round up to a \
@@ -56,7 +70,6 @@ class ClaudeVisionService: VisionServiceProtocol {
         • Camera system: number of lenses, triangular vs. linear arrangement, periscope zoom bump
         • Side button layout: Action Button (iPhone 15 Pro+) vs. standard mute switch
         • Frame material: titanium (15 Pro / 16 Pro) vs. aluminum (standard models)
-        • Camera bump shape and size differences between generations
 
         SNEAKERS & SHOES
         • Sole profile, colorway name, visible size tag, outsole pattern, toe-box shape
@@ -87,7 +100,7 @@ class ClaudeVisionService: VisionServiceProtocol {
           "keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"],
           "confidenceScore": 0.97,
           "suggestedCondition": "good",
-          "estimatedYear": "2019" or null,
+          "estimatedYear": "2019",
           "color": "primary color or null",
           "size": "size if visible or null",
           "model": "exact model number/name, or closest match with ambiguity noted"
@@ -96,52 +109,40 @@ class ClaudeVisionService: VisionServiceProtocol {
         Valid suggestedCondition values: "newWithTags", "newWithoutTags", "newOther", "likeNew", "good", "acceptable", "forParts"
         """
 
-        let userMessage: [String: Any] = [
-            "role": "user",
-            "content": [
-                [
-                    "type": "image",
-                    "source": [
-                        "type": "base64",
-                        "media_type": "image/jpeg",
-                        "data": base64Image
-                    ]
-                ],
-                [
-                    "type": "text",
-                    "text": "Identify this item precisely for eBay reselling. Check all visible hardware details before deciding the exact model. Return only the JSON object."
-                ]
+        // OpenAI multimodal message format — supported by Ollama and LM Studio
+        let userContent: [[String: Any]] = [
+            [
+                "type": "image_url",
+                "image_url": ["url": "data:image/jpeg;base64,\(base64Image)"]
+            ],
+            [
+                "type": "text",
+                "text": "Identify this item precisely for eBay reselling. Check all visible hardware details before deciding the exact model. Return only the JSON object."
             ]
         ]
 
-        // Extended thinking gives Claude a reasoning budget to work through visual ambiguities
-        // (e.g. iPhone 13 Pro Max vs 15 Pro Max) before committing to the JSON answer.
-        // budget_tokens controls how much internal reasoning is allowed; it does not appear
-        // in the output. max_tokens must exceed budget_tokens + expected JSON output (~400).
         return [
-            "model": APIConfig.claudeModel,
-            "max_tokens": 6000,
-            "thinking": [
-                "type": "enabled",
-                "budget_tokens": 5000
+            "model": APIConfig.localLLMModel,
+            "messages": [
+                ["role": "system", "content": systemPrompt],
+                ["role": "user", "content": userContent]
             ],
-            "system": systemPrompt,
-            "messages": [userMessage]
+            "stream": false,
+            "temperature": 0.1   // low temperature keeps the JSON output stable
         ]
     }
 
     // MARK: - Network
 
     private func sendRequest(body: [String: Any]) async throws -> Data {
-        guard let url = URL(string: "\(APIConfig.anthropicBaseURL)/messages") else {
+        let base = APIConfig.localLLMBaseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let url = URL(string: "\(base)/chat/completions") else {
             throw VisionError.invalidURL
         }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(APIConfig.anthropicAPIKey, forHTTPHeaderField: "x-api-key")
-        request.setValue(APIConfig.anthropicVersion, forHTTPHeaderField: "anthropic-version")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await session.data(for: request)
@@ -161,34 +162,36 @@ class ClaudeVisionService: VisionServiceProtocol {
     // MARK: - Response Parsing
 
     private func parseResponse(data: Data) throws -> IdentifiedItem {
-        // Anthropic response envelope
-        struct AnthropicResponse: Codable {
-            struct Content: Codable {
-                let type: String
-                let text: String?
+        struct OpenAIResponse: Codable {
+            struct Choice: Codable {
+                struct Message: Codable { let content: String }
+                let message: Message
             }
-            let content: [Content]
+            let choices: [Choice]
         }
 
-        let envelope = try JSONDecoder().decode(AnthropicResponse.self, from: data)
-        // When extended thinking is enabled the content array contains a "thinking" block
-        // followed by the "text" block. We only need the text block.
-        guard let text = envelope.content.first(where: { $0.type == "text" })?.text else {
+        let envelope = try JSONDecoder().decode(OpenAIResponse.self, from: data)
+        guard let text = envelope.choices.first?.message.content else {
             throw VisionError.emptyResponse
         }
 
-        // Strip any accidental markdown code fences
-        let cleaned = text
+        // Strip markdown fences if the model added them
+        var cleaned = text
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "```json", with: "")
             .replacingOccurrences(of: "```", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
+        // Some models prepend explanation text before the JSON; extract the object.
+        if let start = cleaned.firstIndex(of: "{"),
+           let end = cleaned.lastIndex(of: "}") {
+            cleaned = String(cleaned[start...end])
+        }
+
         guard let jsonData = cleaned.data(using: .utf8) else {
             throw VisionError.parseError("Could not encode response as UTF-8")
         }
 
-        // Decode the structured item response
         struct RawItemResponse: Codable {
             let name: String
             let brand: String?
@@ -205,7 +208,6 @@ class ClaudeVisionService: VisionServiceProtocol {
         }
 
         let raw = try JSONDecoder().decode(RawItemResponse.self, from: jsonData)
-
         let condition = ItemCondition(rawValue: raw.suggestedCondition) ?? .good
 
         return IdentifiedItem(
@@ -222,27 +224,5 @@ class ClaudeVisionService: VisionServiceProtocol {
             size: raw.size,
             model: raw.model
         )
-    }
-}
-
-// MARK: - Errors
-
-enum VisionError: LocalizedError {
-    case imageEncodingFailed
-    case invalidURL
-    case invalidResponse
-    case emptyResponse
-    case apiError(statusCode: Int, message: String)
-    case parseError(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .imageEncodingFailed: return "Could not encode image for upload."
-        case .invalidURL: return "Invalid API URL."
-        case .invalidResponse: return "Invalid server response."
-        case .emptyResponse: return "Empty response from AI."
-        case .apiError(let code, let msg): return "API Error \(code): \(msg)"
-        case .parseError(let msg): return "Parse error: \(msg)"
-        }
     }
 }
