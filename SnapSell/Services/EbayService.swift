@@ -819,7 +819,9 @@ class EbayMarketplaceService {
         }
 
         let report = lines.joined(separator: "\n")
+        #if DEBUG
         print("\n[SnapSell eBay Diagnostic]\n\(report)\n")
+        #endif
         return report
     }
 }

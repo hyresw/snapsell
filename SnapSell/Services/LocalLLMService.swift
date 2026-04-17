@@ -136,7 +136,8 @@ class LocalLLMService: VisionServiceProtocol {
 
     private func sendRequest(body: [String: Any]) async throws -> Data {
         let base = APIConfig.localLLMBaseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard let url = URL(string: "\(base)/chat/completions") else {
+        guard let url = URL(string: "\(base)/chat/completions"),
+              let scheme = url.scheme, ["http", "https"].contains(scheme) else {
             throw VisionError.invalidURL
         }
 
