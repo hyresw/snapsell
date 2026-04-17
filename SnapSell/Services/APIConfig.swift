@@ -13,7 +13,7 @@ enum APIConfig {
     }
 
     static let anthropicBaseURL = "https://api.anthropic.com/v1"
-    static let claudeModel = "claude-sonnet-4-6"
+    static let claudeModel = "claude-opus-4-6"
     static let anthropicVersion = "2023-06-01"
 
     // MARK: - eBay
