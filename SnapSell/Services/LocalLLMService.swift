@@ -100,7 +100,7 @@ class LocalLLMService: VisionServiceProtocol {
           "keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"],
           "confidenceScore": 0.97,
           "suggestedCondition": "good",
-          "estimatedYear": "2019",
+          "estimatedYear": "2019" or null,
           "color": "primary color or null",
           "size": "size if visible or null",
           "model": "exact model number/name, or closest match with ambiguity noted"
@@ -208,7 +208,7 @@ class LocalLLMService: VisionServiceProtocol {
         }
 
         let raw = try JSONDecoder().decode(RawItemResponse.self, from: jsonData)
-        let condition = ItemCondition(rawValue: raw.suggestedCondition) ?? .good
+        let condition = ItemCondition.parse(raw.suggestedCondition)
 
         return IdentifiedItem(
             name: raw.name,

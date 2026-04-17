@@ -206,7 +206,7 @@ class ClaudeVisionService: VisionServiceProtocol {
 
         let raw = try JSONDecoder().decode(RawItemResponse.self, from: jsonData)
 
-        let condition = ItemCondition(rawValue: raw.suggestedCondition) ?? .good
+        let condition = ItemCondition.parse(raw.suggestedCondition)
 
         return IdentifiedItem(
             name: raw.name,

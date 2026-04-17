@@ -146,6 +146,22 @@ enum ItemCondition: String, Codable, CaseIterable {
         case .forParts: return "Parts"
         }
     }
+
+    /// Parses the string an LLM returns for suggestedCondition.
+    /// Accepts both camelCase names ("newWithTags") and raw display values ("New with tags").
+    static func parse(_ value: String) -> ItemCondition {
+        if let exact = ItemCondition(rawValue: value) { return exact }
+        switch value.lowercased().filter({ !$0.isWhitespace }) {
+        case "newwithtags":    return .newWithTags
+        case "newwithouttags": return .newWithoutTags
+        case "newother":       return .newOther
+        case "likenew":        return .likeNew
+        case "good":           return .good
+        case "acceptable":     return .acceptable
+        case "forparts":       return .forParts
+        default:               return .good
+        }
+    }
 }
 
 // MARK: - Listing Type
