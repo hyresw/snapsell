@@ -1,6 +1,8 @@
-# SnapSell — iOS App
+# SnapSell — iOS Reselling App
 
-Snap a photo of any item → Claude AI identifies it → See real eBay sold prices → List it with one tap.
+Snap a photo of any item → AI identifies it → See real eBay sold prices → List it in one tap.
+
+Supports two AI backends: **Claude (cloud)** via the Anthropic API, or a **local vision LLM** (Ollama / LM Studio) for fully offline identification.
 
 ---
 
@@ -9,39 +11,41 @@ Snap a photo of any item → Claude AI identifies it → See real eBay sold pric
 ```
 SnapSell/
 ├── App/
-│   ├── SnapSellApp.swift          # @main entry point
-│   ├── AppState.swift             # Global ObservableObject (listings, tab state)
-│   └── ContentView.swift          # Root TabView
+│   ├── SnapSellApp.swift            # @main entry point
+│   ├── AppState.swift               # Global ObservableObject (listings, tab state)
+│   └── ContentView.swift            # Root TabView
 │
 ├── Models/
-│   └── Models.swift               # IdentifiedItem, EbayListing, PriceAnalysis,
-│                                  # DraftListing, ItemCondition, ListingType, etc.
+│   └── Models.swift                 # IdentifiedItem, EbayListing, PriceAnalysis,
+│                                    # DraftListing, ItemCondition, ListingType, etc.
 │
 ├── Services/
-│   ├── APIConfig.swift            # All API endpoints + credential loading
-│   ├── ClaudeVisionService.swift  # Anthropic API → item identification
-│   ├── EbayAuthService.swift      # OAuth 2.0 flow (ASWebAuthenticationSession)
-│   └── EbayService.swift          # Marketplace Insights + Inventory/Offer APIs
+│   ├── APIConfig.swift              # All credentials + endpoint config (UserDefaults)
+│   ├── VisionService.swift          # VisionServiceProtocol + routing manager
+│   ├── ClaudeVisionService.swift    # Anthropic API → item identification (cloud)
+│   ├── LocalLLMService.swift        # Ollama / LM Studio → item identification (local)
+│   ├── EbayAuthService.swift        # OAuth 2.0 (ASWebAuthenticationSession)
+│   └── EbayService.swift            # Price lookup + listing creation
 │
 ├── Views/
 │   ├── Camera/
-│   │   ├── CameraManager.swift    # AVFoundation capture session
-│   │   ├── ScanFlowView.swift     # Flow coordinator (camera→analyze→results→list→success)
-│   │   └── CameraView.swift       # Live preview + shutter UI
+│   │   ├── CameraManager.swift      # AVFoundation capture session
+│   │   ├── ScanFlowView.swift       # Flow coordinator: camera→analyze→results→list→success
+│   │   └── CameraView.swift         # Live preview + shutter UI
 │   ├── Analysis/
-│   │   └── AnalyzingView.swift    # Animated step-by-step analysis screen
+│   │   └── AnalyzingView.swift      # Animated step-by-step analysis screen
 │   ├── Results/
-│   │   └── ResultsView.swift      # Identified item + sold listings + price stats
+│   │   └── ResultsView.swift        # Identified item + sold listings + price stats
 │   ├── Listing/
-│   │   ├── CreateListingView.swift # Full listing form (price, condition, shipping, etc.)
-│   │   ├── SuccessView.swift       # Post-listing confirmation
-│   │   └── MyListingsView.swift    # Active listings tab
+│   │   ├── CreateListingView.swift  # Full listing form
+│   │   ├── SuccessView.swift        # Post-listing confirmation
+│   │   └── MyListingsView.swift     # Active listings + scan history tabs
 │   └── Profile/
-│       └── ProfileView.swift       # eBay OAuth connect + API key settings
+│       └── ProfileView.swift        # eBay OAuth, API keys, local LLM settings
 │
 └── Resources/
-    ├── Info.plist                  # Camera/photo permissions, URL schemes
-    └── Assets.xcassets/            # AccentYellow color, AppIcon
+    ├── Info.plist                   # Permissions, URL schemes, ATS config
+    └── Assets.xcassets/             # AccentYellow, AppIcon
 ```
 
 ---
@@ -51,8 +55,10 @@ SnapSell/
 - **Xcode 15+**
 - **iOS 17.0+** deployment target
 - **Physical iPhone** (camera doesn't work in Simulator)
-- **Anthropic API key** — get one at https://console.anthropic.com
-- **eBay Developer account** — register at https://developer.ebay.com
+- **Vision backend** — choose one or both:
+  - Cloud: Anthropic API key from https://console.anthropic.com
+  - Local: Ollama or LM Studio running on your Mac (same Wi-Fi)
+- **eBay Developer account** — https://developer.ebay.com
 
 ---
 
@@ -67,54 +73,82 @@ open SnapSell/SnapSell.xcodeproj
 
 ### 2. Set Your Team
 
-In Xcode → `SnapSell` target → `Signing & Capabilities`:
+Xcode → `SnapSell` target → `Signing & Capabilities`:
 - Set **Team** to your Apple Developer account
-- Bundle ID: `com.yourcompany.snapsell` (change to match your team)
+- Update Bundle ID if needed (`com.yourcompany.snapsell`)
 
-### 3. Add Anthropic API Key
+### 3. Configure a Vision Backend
 
-**Option A — At runtime (recommended for development):**
-Launch the app → Profile tab → "Anthropic API Key" → paste your key.
-It's stored in `UserDefaults` on device.
+#### Option A — Claude (cloud, default)
 
-**Option B — Environment variable (for Xcode scheme):**
-Xcode → Product → Scheme → Edit Scheme → Run → Arguments → Environment Variables:
+**At runtime (recommended for development):**
+Launch the app → Profile tab → "Anthropic API Key" → paste your `sk-ant-...` key.
+
+**Via Xcode environment variable:**
+Product → Scheme → Edit Scheme → Run → Arguments → Environment Variables:
 ```
 ANTHROPIC_API_KEY = sk-ant-api03-...
 ```
 
-**Option C — For production**, use Keychain. Replace `UserDefaults` reads in `APIConfig.swift` with `KeychainService`.
+**For production:** Replace `UserDefaults` reads in `APIConfig.swift` with Keychain.
 
-### 4. Set Up eBay Developer Account
+#### Option B — Local LLM (offline, no API costs)
 
-#### a) Register at https://developer.ebay.com
+Run a vision-capable model on your Mac:
 
-#### b) Create a new app
-- Go to **My Account → Application Keys**
-- Click **Create a keyset**
-- App Name: `SnapSell`
-- Environment: Start with **Sandbox**, switch to **Production** when ready
+```bash
+# Ollama (recommended)
+brew install ollama
+ollama pull gemma3:12b       # or qwen2.5vl:7b, llava:13b, moondream
+ollama serve                  # starts at http://localhost:11434
 
-#### c) Get your credentials
-Copy these into `APIConfig.swift` or set as environment variables:
-```
-EBAY_CLIENT_ID     = your-sandbox-client-id
-EBAY_CLIENT_SECRET = your-sandbox-client-secret
+# LM Studio
+# Download from lmstudio.ai, load a VLM, enable the local server (port 1234)
 ```
 
-#### d) Register your OAuth Redirect URI
-In the eBay developer portal under your app's **Auth Accepted OAuth Scopes**:
-- Add redirect URI: `snapsell://oauth/callback`
-- This matches the URL scheme registered in `Info.plist`
+In the app → Profile tab → "Local LLM" section → enable the toggle → configure URL and model.
 
-#### e) Create Seller Business Policies (required for listing API)
-In your **eBay Seller Account** (sandbox or production):
-1. Go to: https://www.bizpolicies.ebay.com/
-2. Create a **Payment policy** → note the `paymentPolicyId`
-3. Create a **Return policy** → note the `returnPolicyId`
-4. Create a **Fulfillment (shipping) policy** → note the `fulfillmentPolicyId`
+Built-in presets:
+| Preset | URL | Model |
+|--------|-----|-------|
+| Gemma 3 12B | http://localhost:11434/v1 | gemma3:12b |
+| Gemma 3 4B | http://localhost:11434/v1 | gemma3:4b |
+| Qwen2.5-VL 7B | http://localhost:11434/v1 | qwen2.5vl:7b |
+| LLaVA 13B | http://localhost:11434/v1 | llava:13b |
+| LM Studio | http://localhost:1234/v1 | *(model loaded in app)* |
 
-Update these in `EbayService.swift` → `createOffer()`:
+The iPhone and Mac must be on the same Wi-Fi network.
+
+### 4. Set Up eBay
+
+#### a) Create an app at https://developer.ebay.com
+
+- My Account → Application Keys → **Create a keyset**
+- Start with **Sandbox**, switch to Production when ready
+- Sandbox is auto-detected: if your Client ID contains `-SBX-`, all eBay URLs switch automatically
+
+#### b) Add credentials
+
+In-app (Profile tab) or via environment variables:
+```
+EBAY_CLIENT_ID     = your-client-id
+EBAY_CLIENT_SECRET = your-client-secret
+```
+
+#### c) Register the OAuth redirect URI
+
+In your eBay app's Auth settings, add:
+```
+snapsell://oauth/callback
+```
+
+#### d) Create Seller Business Policies
+
+Required before the listing API will publish. In your eBay Seller Account:
+1. Go to https://www.bizpolicies.ebay.com/
+2. Create a **Payment**, **Return**, and **Fulfillment (shipping)** policy
+3. Copy the three policy IDs into `EbayService.swift` → `createOffer()`:
+
 ```swift
 "listingPolicies": [
     "fulfillmentPolicyId": "YOUR_FULFILLMENT_POLICY_ID",
@@ -123,111 +157,111 @@ Update these in `EbayService.swift` → `createOffer()`:
 ]
 ```
 
-#### f) Switch from Sandbox to Production
-In `APIConfig.swift`:
-```swift
-static let useSandbox = false   // ← change this
-```
-And swap in your production Client ID/Secret.
-
 ---
 
-## API Flow
+## How It Works
 
-### Item Identification (Claude Vision)
+### Item Identification
 
 ```
-UIImage (JPEG)
+UIImage (JPEG, max 1568px)
     → base64 encode
-    → POST /v1/messages  (claude-opus-4-5, vision)
-    → Structured JSON response
+    → POST to active backend
+    → JSON: name, brand, model, category, keywords, confidence, condition
     → IdentifiedItem model
 ```
 
-The system prompt instructs Claude to return a strict JSON structure with name, brand, category, keywords, confidence score, condition suggestion, etc.
+`VisionServiceManager` routes to `ClaudeVisionService` (Anthropic API) or `LocalLLMService` (OpenAI-compatible `/v1/chat/completions`) based on the `localLLMEnabled` flag.
 
-### eBay Sold Listings (Marketplace Insights API)
+Claude uses extended thinking (5 000 budget tokens) to work through ambiguous visual details before committing to a model identification.
+
+### eBay Price Lookup
+
+Three-tier fallback chain:
 
 ```
-IdentifiedItem.keywords + brand + model
-    → GET /buy/marketplace_insights/v1_beta/item_sales/search?q=...
-    → Array of sold listings with prices and dates
-    → PriceAnalysis (low/avg/high/median/suggested)
+1. Marketplace Insights API  → confirmed sold prices (best)
+2. Browse API                → active listing prices (fallback)
+3. HTML scraper              → public sold prices (last resort)
 ```
 
-> **Note:** The Marketplace Insights API is in beta. You need to request access at:
-> https://developer.ebay.com/programs/marketplace-insights
+Outlier removal uses Tukey fences (IQR × 1.5) before computing stats. Suggested price = `median × 0.92` (8% below median for faster sell-through).
 
-**Fallback:** If you can't access Marketplace Insights, use the **Browse API** to search active listings:
-```
-GET /buy/browse/v1/item_summary/search?q=...&filter=soldItems:true
-```
+### Listing Creation
 
-### Listing Creation (Inventory + Offer API)
-
-Four-step process:
 ```
-1. Upload photo    → POST /sell/inventory/v1/media/upload
-2. Create item     → PUT  /sell/inventory/v1/inventory_item/{sku}
-3. Create offer    → POST /sell/inventory/v1/offer
-4. Publish offer   → POST /sell/inventory/v1/offer/{offerId}/publish
-                   → returns listingId (live eBay item number)
+1. Upload photo  → POST /sell/inventory/v1/media/upload
+2. Create item   → PUT  /sell/inventory/v1/inventory_item/{sku}
+3. Create offer  → POST /sell/inventory/v1/offer
+4. Publish       → POST /sell/inventory/v1/offer/{offerId}/publish
+                 → returns live eBay listing ID
 ```
 
 ---
 
 ## Key Customization Points
 
-### Category Mapping
-`EbayService.swift` → `ebayCategory(for:)` maps item categories to eBay category IDs.
-Expand this with the full eBay category taxonomy for better placement:
-https://developer.ebay.com/devzone/xml/docs/reference/ebay/getcategories.html
+### Price Suggestion
 
-### Price Suggestion Algorithm
 `EbayService.swift` → `buildPriceAnalysis()`:
 ```swift
 let suggestedPrice = (median * 0.92).rounded()
 ```
-Currently suggests 8% below median to increase sell-through speed.
-Adjust this multiplier to taste.
+Adjust the multiplier to match your sell-through preference.
+
+### Category Mapping
+
+`EbayService.swift` → `ebayCategoryID(for:subcategory:)` maps item categories to eBay category IDs. The mapping covers all major Walmart department equivalents. Expand with the full eBay taxonomy:
+https://developer.ebay.com/devzone/xml/docs/reference/ebay/getcategories.html
 
 ### Condition Mapping
-`Models.swift` → `ItemCondition.ebayConditionId` maps to official eBay condition IDs.
-These are category-specific on eBay; the current values work for most categories.
+
+`Models.swift` → `ItemCondition.ebayConditionId` maps conditions to official eBay condition IDs. `ItemCondition.parse()` accepts both camelCase (`"newWithTags"`) and display strings (`"New with tags"`) from LLM responses.
 
 ---
 
-## Running in Sandbox vs Production
+## Sandbox vs Production
 
-| Setting | Sandbox | Production |
+| | Sandbox | Production |
 |---|---|---|
-| `useSandbox` | `true` | `false` |
-| eBay app keys | Sandbox keyset | Production keyset |
+| Client ID | Contains `-SBX-` | Does not contain `-SBX-` |
+| eBay URLs | api.sandbox.ebay.com | api.ebay.com |
 | Listings posted | sandbox.ebay.com | ebay.com |
 | Real money | No | Yes |
 | Marketplace Insights | Limited data | Full data |
 
+Sandbox is detected automatically from the Client ID — no manual flag to flip.
+
 ---
 
-## Permissions Checklist
+## Security Notes
 
-`Info.plist` already includes:
-- `NSCameraUsageDescription` — camera access
-- `NSPhotoLibraryUsageDescription` — photo library
-- `CFBundleURLTypes` with `snapsell` scheme — OAuth callback
-- App Transport Security exceptions for Anthropic + eBay APIs
+- API keys and OAuth tokens are stored in `UserDefaults`. For production, replace with **Keychain** (`SecItemAdd` / `SecItemCopyMatching`). `APIConfig.swift` is the single file to update.
+- App Transport Security (ATS) allows HTTP only for `localhost` (required for local LLM). All cloud endpoints (Anthropic, eBay) are HTTPS.
+- Diagnostic logging (`runDiagnostic()`) is compiled out in Release builds (`#if DEBUG`).
+- The local LLM URL is validated to be a well-formed `http` or `https` URL before use.
+
+---
+
+## Permissions
+
+`Info.plist` includes:
+- `NSCameraUsageDescription` — live camera capture
+- `NSPhotoLibraryUsageDescription` — photo library import
+- `CFBundleURLTypes` with `snapsell` scheme — eBay OAuth callback
+- ATS `NSExceptionDomains` for `localhost` HTTP (local LLM only)
 
 ---
 
 ## Known Limitations & TODOs
 
-- **Marketplace Insights API access** requires separate eBay approval. Use Browse API as fallback.
-- **Seller policies** (payment/return/fulfillment) must be pre-created in Seller Hub before listing.
-- **Photo upload** to eBay's media API is gated; some apps use external image hosting (S3, Cloudinary) and pass the URL to eBay.
+- **Marketplace Insights API** requires separate eBay approval. Browse API fallback is enabled automatically.
+- **Seller policies** (payment/return/fulfillment) must be created in Seller Hub before the listing API will publish.
+- **Photo upload** to eBay's media API has separate gating; some setups use external hosting (S3, Cloudinary) with a URL passed to eBay.
 - **Persistent storage**: listings are in-memory (`AppState`). Add CoreData or SwiftData for persistence across launches.
-- **Multiple photos**: the form has a placeholder for additional photos. Wire up `PHPickerViewController` to collect up to 12 images.
+- **Multiple photos**: form has a placeholder; wire up `PHPickerViewController` for up to 12 images.
 - **Barcode scanning**: add `AVCaptureMetadataOutput` to `CameraManager` for instant barcode → item lookup.
-- **Push notifications**: use APNs to notify when an item sells.
+- **Keychain migration**: replace `UserDefaults` credential storage with Keychain for production.
 
 ---
 
