@@ -1,6 +1,6 @@
 # SnapSell — iOS App
 
-Snap a photo of any item → Claude AI identifies it → See real eBay sold prices → List it with one tap.
+Snap a photo of any item → AI identifies it → See real eBay sold prices → List it with one tap.
 
 ---
 
